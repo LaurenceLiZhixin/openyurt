@@ -21,7 +21,6 @@ import (
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"k8s.io/klog/v2"
 	anpagent "sigs.k8s.io/apiserver-network-proxy/pkg/agent"
 
@@ -41,14 +40,14 @@ var _ TunnelAgent = &anpTunnelAgent{}
 
 // RunAgent runs the yurttunnel-agent which will try to connect yurttunnel-server
 func (ata *anpTunnelAgent) Run(stopChan <-chan struct{}) {
-	dialOption := grpc.WithTransportCredentials(credentials.NewTLS(ata.tlsCfg))
+	//dialOption := grpc.WithTransportCredentials(credentials.NewTLS(ata.tlsCfg))
 	cc := &anpagent.ClientSetConfig{
 		Address:                 ata.tunnelServerAddr,
 		AgentID:                 ata.nodeName,
 		AgentIdentifiers:        ata.agentIdentifiers,
 		SyncInterval:            5 * time.Second,
 		ProbeInterval:           5 * time.Second,
-		DialOptions:             []grpc.DialOption{dialOption},
+		DialOptions:             []grpc.DialOption{grpc.WithInsecure()},
 		ServiceAccountTokenPath: "",
 	}
 

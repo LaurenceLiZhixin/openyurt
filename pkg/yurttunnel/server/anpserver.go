@@ -26,7 +26,6 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"k8s.io/klog/v2"
 	anpserver "sigs.k8s.io/apiserver-network-proxy/pkg/server"
@@ -176,7 +175,7 @@ func runMasterServer(handler http.Handler,
 func runAgentServer(tlsCfg *tls.Config,
 	agentServerAddr string,
 	proxyServer *anpserver.ProxyServer) error {
-	serverOption := grpc.Creds(credentials.NewTLS(tlsCfg))
+	//serverOption := grpc.Creds(credentials.NewTLS(tlsCfg))
 
 	ka := keepalive.ServerParameters{
 		// Ping the client if it is idle for `Time` seconds to ensure the
@@ -187,8 +186,7 @@ func runAgentServer(tlsCfg *tls.Config,
 		Timeout: constants.YurttunnelANPGrpcKeepAliveTimeoutSec * time.Second,
 	}
 
-	grpcServer := grpc.NewServer(serverOption,
-		grpc.KeepaliveParams(ka))
+	grpcServer := grpc.NewServer(grpc.KeepaliveParams(ka))
 
 	anpagent.RegisterAgentServiceServer(grpcServer, proxyServer)
 	listener, err := net.Listen("tcp", agentServerAddr)
