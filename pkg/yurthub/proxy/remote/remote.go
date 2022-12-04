@@ -33,19 +33,18 @@ import (
 	"k8s.io/klog/v2"
 
 	"github.com/openyurtio/openyurt/pkg/yurthub/cachemanager"
-	"github.com/openyurtio/openyurt/pkg/yurthub/filter"
-	"github.com/openyurtio/openyurt/pkg/yurthub/healthchecker"
+	"github.com/openyurtio/openyurt/pkg/yurthub/filter/manager"
+	"github.com/openyurtio/openyurt/pkg/yurthub/proxy/util"
 	"github.com/openyurtio/openyurt/pkg/yurthub/transport"
-	"github.com/openyurtio/openyurt/pkg/yurthub/util"
+	hubutil "github.com/openyurtio/openyurt/pkg/yurthub/util"
 )
 
 // RemoteProxy is an reverse proxy for remote server
 type RemoteProxy struct {
-	checker              healthchecker.HealthChecker
 	reverseProxy         *httputil.ReverseProxy
 	cacheMgr             cachemanager.CacheManager
 	remoteServer         *url.URL
-	filterManager        *filter.Manager
+	filterManager        *manager.Manager
 	currentTransport     http.RoundTripper
 	bearerTransport      http.RoundTripper
 	upgradeHandler       *proxy.UpgradeAwareHandler
@@ -64,8 +63,7 @@ func (r *responder) Error(w http.ResponseWriter, req *http.Request, err error) {
 func NewRemoteProxy(remoteServer *url.URL,
 	cacheMgr cachemanager.CacheManager,
 	transportMgr transport.Interface,
-	healthChecker healthchecker.HealthChecker,
-	filterManager *filter.Manager,
+	filterManager *manager.Manager,
 	stopCh <-chan struct{}) (*RemoteProxy, error) {
 	currentTransport := transportMgr.CurrentTransport()
 	if currentTransport == nil {
@@ -82,7 +80,6 @@ func NewRemoteProxy(remoteServer *url.URL,
 	bearerUpgradeAwareHandler.UseRequestLocation = true
 
 	proxyBackend := &RemoteProxy{
-		checker:              healthChecker,
 		reverseProxy:         httputil.NewSingleHostReverseProxy(remoteServer),
 		cacheMgr:             cacheMgr,
 		remoteServer:         remoteServer,
@@ -107,6 +104,10 @@ func (rp *RemoteProxy) Name() string {
 	return rp.remoteServer.String()
 }
 
+func (rp *RemoteProxy) RemoteServer() *url.URL {
+	return rp.remoteServer
+}
+
 func (rp *RemoteProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	if httpstream.IsUpgradeRequest(req) {
 		klog.V(5).Infof("get upgrade request %s", req.URL)
@@ -119,11 +120,6 @@ func (rp *RemoteProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
 	}
 
 	rp.reverseProxy.ServeHTTP(rw, req)
-}
-
-// IsHealthy returns healthy status of remote server
-func (rp *RemoteProxy) IsHealthy() bool {
-	return rp.checker.IsHealthy(rp.remoteServer)
 }
 
 func (rp *RemoteProxy) modifyResponse(resp *http.Response) error {
@@ -139,7 +135,7 @@ func (rp *RemoteProxy) modifyResponse(resp *http.Response) error {
 	info, exists := apirequest.RequestInfoFrom(ctx)
 	if exists {
 		if info.Verb == "watch" {
-			klog.V(5).Infof("add transfer-encoding=chunked header into response for req %s", util.ReqString(req))
+			klog.V(5).Infof("add transfer-encoding=chunked header into response for req %s", hubutil.ReqString(req))
 			h := resp.Header
 			if hv := h.Get("Transfer-Encoding"); hv == "" {
 				h.Add("Transfer-Encoding", "chunked")
@@ -149,21 +145,21 @@ func (rp *RemoteProxy) modifyResponse(resp *http.Response) error {
 
 	if resp.StatusCode >= http.StatusOK && resp.StatusCode <= http.StatusPartialContent {
 		// prepare response content type
-		reqContentType, _ := util.ReqContentTypeFrom(ctx)
+		reqContentType, _ := hubutil.ReqContentTypeFrom(ctx)
 		respContentType := resp.Header.Get("Content-Type")
 		if len(respContentType) == 0 {
 			respContentType = reqContentType
 		}
-		ctx = util.WithRespContentType(ctx, respContentType)
+		ctx = hubutil.WithRespContentType(ctx, respContentType)
 		req = req.WithContext(ctx)
 
 		// filter response data
 		if rp.filterManager != nil {
-			if rp.filterManager.Approve(req) {
-				wrapBody, needUncompressed := util.NewGZipReaderCloser(resp.Header, resp.Body, req, "filter")
-				size, filterRc, err := rp.filterManager.Filter(req, wrapBody, rp.stopCh)
+			if ok, runner := rp.filterManager.FindRunner(req); ok {
+				wrapBody, needUncompressed := hubutil.NewGZipReaderCloser(resp.Header, resp.Body, req, "filter")
+				size, filterRc, err := runner.Filter(req, wrapBody, rp.stopCh)
 				if err != nil {
-					klog.Errorf("failed to filter response for %s, %v", util.ReqString(req), err)
+					klog.Errorf("failed to filter response for %s, %v", hubutil.ReqString(req), err)
 					return err
 				}
 				resp.Body = filterRc
@@ -182,12 +178,12 @@ func (rp *RemoteProxy) modifyResponse(resp *http.Response) error {
 
 		// cache resp with storage interface
 		if rp.cacheMgr != nil && rp.cacheMgr.CanCacheFor(req) {
-			rc, prc := util.NewDualReadCloser(req, resp.Body, true)
-			wrapPrc, _ := util.NewGZipReaderCloser(resp.Header, prc, req, "cache-manager")
+			rc, prc := hubutil.NewDualReadCloser(req, resp.Body, true)
+			wrapPrc, _ := hubutil.NewGZipReaderCloser(resp.Header, prc, req, "cache-manager")
 			go func(req *http.Request, prc io.ReadCloser, stopCh <-chan struct{}) {
 				err := rp.cacheMgr.CacheResponse(req, prc, stopCh)
 				if err != nil && err != io.EOF && !errors.Is(err, context.Canceled) {
-					klog.Errorf("%s response cache ended with error, %v", util.ReqString(req), err)
+					klog.Errorf("%s response cache ended with error, %v", hubutil.ReqString(req), err)
 				}
 			}(req, wrapPrc, rp.stopCh)
 
@@ -212,7 +208,7 @@ func (rp *RemoteProxy) modifyResponse(resp *http.Response) error {
 }
 
 func (rp *RemoteProxy) errorHandler(rw http.ResponseWriter, req *http.Request, err error) {
-	klog.Errorf("remote proxy error handler: %s, %v", util.ReqString(req), err)
+	klog.Errorf("remote proxy error handler: %s, %v", hubutil.ReqString(req), err)
 	if rp.cacheMgr == nil || !rp.cacheMgr.CanCacheFor(req) {
 		rw.WriteHeader(http.StatusBadGateway)
 		return
@@ -247,7 +243,7 @@ func isBearerRequest(req *http.Request) bool {
 	if auth != "" {
 		parts := strings.Split(auth, " ")
 		if len(parts) == 2 && strings.ToLower(parts[0]) == "bearer" {
-			klog.V(5).Infof("request: %s with bearer token: %s", util.ReqString(req), parts[1])
+			klog.V(5).Infof("request: %s with bearer token: %s", hubutil.ReqString(req), parts[1])
 			return true
 		}
 	}

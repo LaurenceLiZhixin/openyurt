@@ -42,14 +42,10 @@ import (
 	ipUtils "github.com/openyurtio/openyurt/pkg/util/ip"
 	"github.com/openyurtio/openyurt/pkg/yurthub/cachemanager"
 	"github.com/openyurtio/openyurt/pkg/yurthub/filter"
-	"github.com/openyurtio/openyurt/pkg/yurthub/filter/discardcloudservice"
-	"github.com/openyurtio/openyurt/pkg/yurthub/filter/endpointsfilter"
-	"github.com/openyurtio/openyurt/pkg/yurthub/filter/initializer"
-	"github.com/openyurtio/openyurt/pkg/yurthub/filter/masterservice"
-	"github.com/openyurtio/openyurt/pkg/yurthub/filter/servicetopology"
+	"github.com/openyurtio/openyurt/pkg/yurthub/filter/manager"
 	"github.com/openyurtio/openyurt/pkg/yurthub/kubernetes/meta"
 	"github.com/openyurtio/openyurt/pkg/yurthub/kubernetes/serializer"
-	"github.com/openyurtio/openyurt/pkg/yurthub/storage/factory"
+	"github.com/openyurtio/openyurt/pkg/yurthub/storage/disk"
 	"github.com/openyurtio/openyurt/pkg/yurthub/util"
 	yurtcorev1alpha1 "github.com/openyurtio/yurt-app-manager-api/pkg/yurtappmanager/apis/apps/v1alpha1"
 	yurtclientset "github.com/openyurtio/yurt-app-manager-api/pkg/yurtappmanager/client/clientset/versioned"
@@ -76,6 +72,7 @@ type YurtHubConfiguration struct {
 	HeartbeatFailedRetry              int
 	HeartbeatHealthyThreshold         int
 	HeartbeatTimeoutSeconds           int
+	HeartbeatIntervalSeconds          int
 	MaxRequestInFlight                int
 	JoinToken                         string
 	RootDir                           string
@@ -91,8 +88,10 @@ type YurtHubConfiguration struct {
 	YurtSharedFactory                 yurtinformers.SharedInformerFactory
 	WorkingMode                       util.WorkingMode
 	KubeletHealthGracePeriod          time.Duration
-	FilterManager                     *filter.Manager
+	FilterManager                     *manager.Manager
 	CertIPs                           []net.IP
+	CoordinatorServer                 *url.URL
+	MinRequestTimeout                 time.Duration
 }
 
 // Complete converts *options.YurtHubOptions to *YurtHubConfiguration
@@ -109,14 +108,18 @@ func Complete(options *options.YurtHubOptions) (*YurtHubConfiguration, error) {
 		}
 	}
 
-	storageManager, err := factory.CreateStorage(options.DiskCachePath)
+	storageManager, err := disk.NewDiskStorage(options.DiskCachePath)
 	if err != nil {
 		klog.Errorf("could not create storage manager, %v", err)
 		return nil, err
 	}
 	storageWrapper := cachemanager.NewStorageWrapper(storageManager)
 	serializerManager := serializer.NewSerializerManager()
-	restMapperManager := meta.NewRESTMapperManager(storageManager)
+	restMapperManager, err := meta.NewRESTMapperManager(options.DiskCachePath)
+	if err != nil {
+		klog.Errorf("failed to create restMapperManager at path %s, %v", options.DiskCachePath, err)
+		return nil, err
+	}
 
 	hubServerAddr := net.JoinHostPort(options.YurtHubHost, options.YurtHubPort)
 	proxyServerAddr := net.JoinHostPort(options.YurtHubProxyHost, options.YurtHubProxyPort)
@@ -130,8 +133,7 @@ func Complete(options *options.YurtHubOptions) (*YurtHubConfiguration, error) {
 	}
 	tenantNs := util.ParseTenantNs(options.YurtHubCertOrganizations)
 	registerInformers(sharedFactory, yurtSharedFactory, workingMode, serviceTopologyFilterEnabled(options), options.NodePoolName, options.NodeName, tenantNs)
-	filterManager, err := createFilterManager(options, sharedFactory, yurtSharedFactory, serializerManager, storageWrapper, us[0].Host, proxySecureServerDummyAddr, proxySecureServerAddr)
-
+	filterManager, err := manager.NewFilterManager(options, sharedFactory, yurtSharedFactory, serializerManager, storageWrapper, us[0].Host)
 	if err != nil {
 		klog.Errorf("could not create filter manager, %v", err)
 		return nil, err
@@ -160,6 +162,7 @@ func Complete(options *options.YurtHubOptions) (*YurtHubConfiguration, error) {
 		HeartbeatFailedRetry:              options.HeartbeatFailedRetry,
 		HeartbeatHealthyThreshold:         options.HeartbeatHealthyThreshold,
 		HeartbeatTimeoutSeconds:           options.HeartbeatTimeoutSeconds,
+		HeartbeatIntervalSeconds:          options.HeartbeatIntervalSeconds,
 		MaxRequestInFlight:                options.MaxRequestInFlight,
 		JoinToken:                         options.JoinToken,
 		RootDir:                           options.RootDir,
@@ -176,6 +179,7 @@ func Complete(options *options.YurtHubOptions) (*YurtHubConfiguration, error) {
 		KubeletHealthGracePeriod:          options.KubeletHealthGracePeriod,
 		FilterManager:                     filterManager,
 		CertIPs:                           certIPs,
+		MinRequestTimeout:                 options.MinRequestTimeout,
 	}
 
 	return cfg, nil
@@ -289,70 +293,6 @@ func registerInformers(informerFactory informers.SharedInformerFactory,
 		informerFactory.InformerFor(&corev1.Secret{}, newSecretInformer)
 	}
 
-}
-
-// registerAllFilters by order, the front registered filter will be
-// called before the behind registered ones.
-func registerAllFilters(filters *filter.Filters) {
-	servicetopology.Register(filters)
-	masterservice.Register(filters)
-	discardcloudservice.Register(filters)
-	endpointsfilter.Register(filters)
-}
-
-// generateNameToFilterMapping return union filters that initializations completed.
-func generateNameToFilterMapping(filters *filter.Filters,
-	sharedFactory informers.SharedInformerFactory,
-	yurtSharedFactory yurtinformers.SharedInformerFactory,
-	serializerManager *serializer.SerializerManager,
-	storageWrapper cachemanager.StorageWrapper,
-	workingMode util.WorkingMode,
-	nodeName, mutatedMasterServiceAddr string) (map[string]filter.Runner, error) {
-	if filters == nil {
-		return nil, nil
-	}
-
-	genericInitializer := initializer.New(sharedFactory, yurtSharedFactory, serializerManager, storageWrapper, nodeName, mutatedMasterServiceAddr, workingMode)
-	initializerChain := filter.FilterInitializers{}
-	initializerChain = append(initializerChain, genericInitializer)
-	return filters.NewFromFilters(initializerChain)
-}
-
-// createFilterManager will create a filter manager for data filtering framework.
-func createFilterManager(options *options.YurtHubOptions,
-	sharedFactory informers.SharedInformerFactory,
-	yurtSharedFactory yurtinformers.SharedInformerFactory,
-	serializerManager *serializer.SerializerManager,
-	storageWrapper cachemanager.StorageWrapper,
-	apiserverAddr string,
-	proxySecureServerDummyAddr string,
-	proxySecureServerAddr string,
-) (*filter.Manager, error) {
-	if !options.EnableResourceFilter {
-		return nil, nil
-	}
-
-	if options.WorkingMode == string(util.WorkingModeCloud) {
-		options.DisabledResourceFilters = append(options.DisabledResourceFilters, filter.DisabledInCloudMode...)
-	}
-	filters := filter.NewFilters(options.DisabledResourceFilters)
-	registerAllFilters(filters)
-
-	mutatedMasterServiceAddr := apiserverAddr
-	if options.AccessServerThroughHub {
-		if options.EnableDummyIf {
-			mutatedMasterServiceAddr = proxySecureServerDummyAddr
-		} else {
-			mutatedMasterServiceAddr = proxySecureServerAddr
-		}
-	}
-
-	filterMapping, err := generateNameToFilterMapping(filters, sharedFactory, yurtSharedFactory, serializerManager, storageWrapper, util.WorkingMode(options.WorkingMode), options.NodeName, mutatedMasterServiceAddr)
-	if err != nil {
-		return nil, err
-	}
-
-	return filter.NewFilterManager(sharedFactory, filterMapping), nil
 }
 
 // serviceTopologyFilterEnabled is used to verify the service topology filter should be enabled or not.

@@ -86,33 +86,75 @@ detail info: https://github.com/orgs/openyurtio/projects/6/views/1
 
 **ControlPlane SIG**
 
-- Provide NodePool Governance Capability
-  - Yurthub adds lease proxy mechanism ([#779](https://github.com/openyurtio/openyurt/issues/779))
-  - Add pool-coordinator-controller component ([#774](https://github.com/openyurtio/openyurt/issues/774))
-  - Yurthub supports writing metadata to pool-coordinator ([#778](https://github.com/openyurtio/openyurt/issues/778))
-  - Add pool-coordinator component ([#777](https://github.com/openyurtio/openyurt/issues/777))
-  - Add admission webhook ([#775](https://github.com/openyurtio/openyurt/issues/775))
-  - Modify Yurt-Controller-Manager ([#776](https://github.com/openyurtio/openyurt/issues/776))
-- Support to use Helm charts to install OpenYurt ([#824](https://github.com/openyurtio/openyurt/issues/824))
-- Improve OpenYurt Experience Center
-  - support deploy EdgeX Foundry on the edge site
+- Improve components crd naming convention and style ([#852](https://github.com/openyurtio/openyurt/issues/852))
+- Improve service topology function when nodepool or service change ([#871](https://github.com/openyurtio/openyurt/issues/871))
+- Support OTA/Auto update model for DaemonSet workload ([#914](https://github.com/openyurtio/openyurt/issues/914))
 
 detail info: https://github.com/orgs/openyurtio/projects/7
 
 **DataPlane SIG**
 
-- support SLB as public network exporter for gateway ([#22](https://github.com/openyurtio/raven/issues/22))
-- add reconciliation loop to check route entries and vpn connections periodically. ([#10](https://github.com/openyurtio/raven/issues/10))
-- support distribute route path decision ([#14](https://github.com/openyurtio/raven/issues/14))
-- [feature request]merge yurt-tunnel-server/agent into raven except ANP ([#40](https://github.com/openyurtio/raven/issues/40))
-- [feature request]enhance ANP for yurt-tunnel in raven ([#41](https://github.com/openyurtio/raven/issues/41))
+- Add unit tests ([#14](https://github.com/openyurtio/node-resource-manager/pull/14))
 
-detail info: https://github.com/openyurtio/raven/projects/3
+detail info: https://github.com/orgs/openyurtio/projects/8/views/1
 
 **IoT SIG**
 
-- define `YurtDeviceInterface` for integrating IOT systems seamlessly
-- support enable security features for EdgeX instance by yurt-edgex-manager
-- Added the definition of equipment Command and data processing process Pipeline.
-- Manage Benchmark based on OpenYurt+EdgeX cloud native device
+- [Feature] Add webhook for edgex ([#22](https://github.com/openyurtio/yurt-edgex-manager/issues/22))
+- Update yurt-edgex-manager to support kubernetes 1.22+ ([#21](https://github.com/openyurtio/yurt-edgex-manager/issues/21))
+- [unit test] improve unit test coverage for yurt-device-controller ([#41](https://github.com/openyurtio/yurt-device-controller/issues/41))
+- Add webhook test case in e2e ([#34](https://github.com/openyurtio/yurt-edgex-manager/issues/34))
 
+detail info: https://github.com/orgs/openyurtio/projects/4
+
+## v1.2 Roadmap
+
+**ControlPlane SIG**
+
+- Provide NodePool Governance Capability
+  - add pool-coordinator-certificate controller ([#774](https://github.com/openyurtio/openyurt/issues/774))
+  - add admission webhook ([#775](https://github.com/openyurtio/openyurt/issues/775))
+  - remove nodelifecycle controller and add pool-coordinator controller in yurt-controller-manager component ([#776](https://github.com/openyurtio/openyurt/issues/776))
+  - add pool-coordinator component ([#777](https://github.com/openyurtio/openyurt/issues/777))
+  - yurthub are delegated to report heartbeats for nodes that disconnected with cloud ([#779](https://github.com/openyurtio/openyurt/issues/779))
+- pool-coordinator supports share pool scope data in the nodepool ([#778](https://github.com/openyurtio/openyurt/issues/778))
+- Improve Yurtadm Join command ([#889](https://github.com/openyurtio/openyurt/issues/889))
+- Improve Yurtadm Reset command ([#1058](https://github.com/openyurtio/openyurt/issues/1058))
+
+detail info: https://github.com/orgs/openyurtio/projects/10
+
+**DataPlane SIG**
+
+- support SLB as public network exporter for gateway ([#22](https://github.com/openyurtio/raven/issues/22))
+- add reconciliation loop to check route entries and vpn connections periodically. ([#10](https://github.com/openyurtio/raven/issues/10))
+- [Raven-L7] Endpoints manager implementation ([#69](https://github.com/openyurtio/raven/issues/69))
+- [Raven-L7] Raven l7 proxy implementation ([#70](https://github.com/openyurtio/raven/issues/70))
+- [Raven-L7] DNS manager implementation ([#66](https://github.com/openyurtio/raven/issues/66))
+- [Raven-L7] Cert manager implementation ([#67](https://github.com/openyurtio/raven/issues/67))
+- support to use helm to deploy raven ([#73](https://github.com/openyurtio/raven/issues/73))
+
+detail info: https://github.com/orgs/openyurtio/projects/9
+
+**IoT SIG**
+
+- [Design] Auto collect edgex deployment information and feed yurt-edgex-manager ([#24](https://github.com/openyurtio/yurt-edgex-manager/issues/24))
+- [EdgeX Auto-Collector] Perform special processing on some of the edgex environment variables ([#63](https://github.com/openyurtio/yurt-edgex-manager/issues/63))
+- [EdgeX Auto-Collector] Rewrite the controller part which read the edgex configuration section ([#62](https://github.com/openyurtio/yurt-edgex-manager/issues/62))
+- [EdgeX Auto-Collector] Synchronize the images of edgex to openyurt ([#60](https://github.com/openyurtio/yurt-edgex-manager/issues/60))
+- [EdgeX Auto-Collector] Collect volumes information about each component ([#61](https://github.com/openyurtio/yurt-edgex-manager/issues/61))
+- [EdgeX Auto-Collector] Set the Auto-Collector to be triggered periodically ([#65](https://github.com/openyurtio/yurt-edgex-manager/issues/65))
+- [EdgeX Auto-Collector] Modify CRD to give users the option to deploy a secure or insecure version of edgex ([#67](https://github.com/openyurtio/yurt-edgex-manager/issues/67))
+- [EdgeX Auto-Collector] Upgrade apiVersion and deprecate additionalServices and additionalDeployments in new version ([#68](https://github.com/openyurtio/yurt-edgex-manager/issues/68))
+
+detail info: https://github.com/orgs/openyurtio/projects/2
+
+## v1.3 Roadmap
+
+**ControlPlane SIG**
+
+- move scattered controllers into yurt-controller-manager ([#1067](https://github.com/openyurtio/openyurt/issues/1067))
+- combine yurtctl tool into yurtadm tool ([#1059](https://github.com/openyurtio/openyurt/issues/1059))
+- support OTA and Auto upgrade model for static pod ([#1079](https://github.com/openyurtio/openyurt/issues/1079))
+- install yurthub component on edge nodes depending on StaticPod cr resource ([#1080](https://github.com/openyurtio/openyurt/issues/1080))
+
+detail info: https://github.com/orgs/openyurtio/projects/11

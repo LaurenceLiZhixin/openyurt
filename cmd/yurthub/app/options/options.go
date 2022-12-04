@@ -56,6 +56,7 @@ type YurtHubOptions struct {
 	HeartbeatFailedRetry      int
 	HeartbeatHealthyThreshold int
 	HeartbeatTimeoutSeconds   int
+	HeartbeatIntervalSeconds  int
 	MaxRequestInFlight        int
 	JoinToken                 string
 	RootDir                   string
@@ -72,6 +73,7 @@ type YurtHubOptions struct {
 	WorkingMode               string
 	KubeletHealthGracePeriod  time.Duration
 	EnableNodePool            bool
+	MinRequestTimeout         time.Duration
 }
 
 // NewYurtHubOptions creates a new YurtHubOptions with a default config.
@@ -89,6 +91,7 @@ func NewYurtHubOptions() *YurtHubOptions {
 		HeartbeatFailedRetry:      3,
 		HeartbeatHealthyThreshold: 2,
 		HeartbeatTimeoutSeconds:   2,
+		HeartbeatIntervalSeconds:  10,
 		MaxRequestInFlight:        250,
 		RootDir:                   filepath.Join("/var/lib/", projectinfo.GetHubName()),
 		EnableProfiling:           true,
@@ -102,6 +105,7 @@ func NewYurtHubOptions() *YurtHubOptions {
 		WorkingMode:               string(util.WorkingModeEdge),
 		KubeletHealthGracePeriod:  time.Second * 40,
 		EnableNodePool:            true,
+		MinRequestTimeout:         time.Second * 1800,
 	}
 	return o
 }
@@ -148,6 +152,7 @@ func (o *YurtHubOptions) AddFlags(fs *pflag.FlagSet) {
 	fs.IntVar(&o.HeartbeatFailedRetry, "heartbeat-failed-retry", o.HeartbeatFailedRetry, "number of heartbeat request retry after having failed.")
 	fs.IntVar(&o.HeartbeatHealthyThreshold, "heartbeat-healthy-threshold", o.HeartbeatHealthyThreshold, "minimum consecutive successes for the heartbeat to be considered healthy after having failed.")
 	fs.IntVar(&o.HeartbeatTimeoutSeconds, "heartbeat-timeout-seconds", o.HeartbeatTimeoutSeconds, " number of seconds after which the heartbeat times out.")
+	fs.IntVar(&o.HeartbeatIntervalSeconds, "heartbeat-interval-seconds", o.HeartbeatIntervalSeconds, " number of seconds for omitting one time heartbeat to remote server.")
 	fs.IntVar(&o.MaxRequestInFlight, "max-requests-in-flight", o.MaxRequestInFlight, "the maximum number of parallel requests.")
 	fs.StringVar(&o.JoinToken, "join-token", o.JoinToken, "the Join token for bootstrapping hub agent when --cert-mgr-mode=hubself.")
 	fs.StringVar(&o.RootDir, "root-dir", o.RootDir, "directory path for managing hub agent files(pki, cache etc).")
@@ -165,6 +170,7 @@ func (o *YurtHubOptions) AddFlags(fs *pflag.FlagSet) {
 	fs.StringVar(&o.WorkingMode, "working-mode", o.WorkingMode, "the working mode of yurthub(edge, cloud).")
 	fs.DurationVar(&o.KubeletHealthGracePeriod, "kubelet-health-grace-period", o.KubeletHealthGracePeriod, "the amount of time which we allow kubelet to be unresponsive before stop renew node lease")
 	fs.BoolVar(&o.EnableNodePool, "enable-node-pool", o.EnableNodePool, "enable list/watch nodepools resource or not for filters(only used for testing)")
+	fs.DurationVar(&o.MinRequestTimeout, "min-request-timeout", o.MinRequestTimeout, "An optional field indicating at least how long a proxy handler must keep a request open before timing it out. Currently only honored by the local watch request handler(use request parameter timeoutSeconds firstly), which picks a randomized value above this number as the connection timeout, to spread out load.")
 }
 
 // verifyDummyIP verify the specified ip is valid or not and set the default ip if empty

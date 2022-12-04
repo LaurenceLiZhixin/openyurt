@@ -26,7 +26,9 @@ import (
 	"time"
 
 	"github.com/openyurtio/openyurt/pkg/controller/certificates"
+	daemonpodupdater "github.com/openyurtio/openyurt/pkg/controller/daemonpodupdater"
 	lifecyclecontroller "github.com/openyurtio/openyurt/pkg/controller/nodelifecycle"
+	"github.com/openyurtio/openyurt/pkg/controller/servicetopology"
 )
 
 func startNodeLifecycleController(ctx ControllerContext) (http.Handler, bool, error) {
@@ -63,5 +65,32 @@ func startYurtCSRApproverController(ctx ControllerContext) (http.Handler, bool, 
 	}
 	go csrApprover.Run(2, ctx.Stop)
 
+	return nil, true, nil
+}
+
+func startDaemonPodUpdaterController(ctx ControllerContext) (http.Handler, bool, error) {
+	daemonPodUpdaterCtrl := daemonpodupdater.NewController(
+		ctx.ClientBuilder.ClientOrDie("daemonPodUpdater-controller"),
+		ctx.InformerFactory.Apps().V1().DaemonSets(),
+		ctx.InformerFactory.Core().V1().Nodes(),
+		ctx.InformerFactory.Core().V1().Pods(),
+	)
+
+	go daemonPodUpdaterCtrl.Run(2, ctx.Stop)
+	return nil, true, nil
+}
+
+func startServiceTopologyController(ctx ControllerContext) (http.Handler, bool, error) {
+	clientSet := ctx.ClientBuilder.ClientOrDie("yurt-servicetopology-controller")
+
+	svcTopologyController, err := servicetopology.NewServiceTopologyController(
+		clientSet,
+		ctx.InformerFactory,
+		ctx.YurtInformerFactory,
+	)
+	if err != nil {
+		return nil, false, err
+	}
+	go svcTopologyController.Run(ctx.Stop)
 	return nil, true, nil
 }

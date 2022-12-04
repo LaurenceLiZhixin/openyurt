@@ -33,11 +33,16 @@ const (
 	// If end users want to use specified LB service at the edge side,
 	// End users should add annotation["openyurt.io/skip-discard"]="true" for LB service.
 	SkipDiscardServiceAnnotation = "openyurt.io/skip-discard"
-
-	// EndpointsFilterName is used to reassemble endpoints in order to make the data traffic be
-	// load balanced only to the nodepool valid endpoints.
-	EndpointsFilterName = "endpoints"
 )
 
-// DisabledInCloudMode contains the filters that should be disabled when yurthub is working in cloud mode.
-var DisabledInCloudMode = []string{DiscardCloudServiceFilterName}
+var (
+	// DisabledInCloudMode contains the filters that should be disabled when yurthub is working in cloud mode.
+	DisabledInCloudMode = []string{DiscardCloudServiceFilterName}
+
+	// SupportedComponentsForFilter is used for specifying which components are supported by filters as default setting.
+	SupportedComponentsForFilter = map[string]string{
+		MasterServiceFilterName:       "kubelet",
+		DiscardCloudServiceFilterName: "kube-proxy",
+		ServiceTopologyFilterName:     "kube-proxy, coredns, nginx-ingress-controller",
+	}
+)

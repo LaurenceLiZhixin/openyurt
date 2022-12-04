@@ -21,14 +21,54 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"strings"
+	"reflect"
 	"testing"
 
+	"github.com/spf13/cobra"
 	v1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	clientsetfake "k8s.io/client-go/kubernetes/fake"
 )
+
+func TestAddFlags(t *testing.T) {
+	args := []string{
+		"--kind-config-path=/home/root/.kube/config.yaml",
+		"--node-num=100",
+		"--cluster-name=test-openyurt",
+		"--cloud-nodes=worker3",
+		"--openyurt-version=v1.0.1",
+		"--kubernetes-version=v1.22.7",
+		"--use-local-images=true",
+		"--kube-config=/home/root/.kube/config",
+		"--ignore-error=true",
+		"--enable-dummy-if=true",
+		"--disable-default-cni=true",
+	}
+	o := newKindOptions()
+	cmd := &cobra.Command{}
+	fs := cmd.Flags()
+	addFlags(fs, o)
+	fs.Parse(args)
+
+	expectedOpts := &kindOptions{
+		KindConfigPath:    "/home/root/.kube/config.yaml",
+		NodeNum:           100,
+		ClusterName:       "test-openyurt",
+		CloudNodes:        "worker3",
+		OpenYurtVersion:   "v1.0.1",
+		KubernetesVersion: "v1.22.7",
+		UseLocalImages:    true,
+		KubeConfig:        "/home/root/.kube/config",
+		IgnoreError:       true,
+		EnableDummyIf:     true,
+		DisableDefaultCNI: true,
+	}
+
+	if !reflect.DeepEqual(expectedOpts, o) {
+		t.Errorf("expect options: %v, but got %v", expectedOpts, o)
+	}
+}
 
 func TestValidateKubernetesVersion(t *testing.T) {
 	cases := map[string]struct {
@@ -75,35 +115,30 @@ func TestValidateOpenYurtVersion(t *testing.T) {
 	cases := map[string]struct {
 		version string
 		ignore  bool
-		want    string
+		wantErr bool
 	}{
 		"valid": {
 			"v0.6.0",
 			false,
-			"",
+			false,
 		},
 		"unsupported": {
 			"0.5.10",
 			false,
-			fmt.Sprintf("0.5.10 is not a valid openyurt version, all valid versions are %s. If you know what you're doing, you can set --ignore-error",
-				strings.Join(validOpenYurtVersions, ",")),
+			true,
 		},
 		"ignoreError": {
 			"0.5.10",
 			true,
-			"",
+			false,
 		},
 	}
 	for name, c := range cases {
 		err := validateOpenYurtVersion(c.version, c.ignore)
 		if err == nil {
-			if c.want != "" {
-				t.Errorf("validateOpenYurtVersion failed at case %s, want: %s, got: nil", name, c.want)
+			if c.wantErr {
+				t.Errorf("validateOpenYurtVersion failed at case %s, wantErr: %v, got: nil", name, c.wantErr)
 			}
-			continue
-		}
-		if err.Error() != c.want {
-			t.Errorf("validateOpenYurtVersion failed at case %s, want: %s, got: %s", name, c.want, err.Error())
 		}
 	}
 }
@@ -111,10 +146,11 @@ func TestValidateOpenYurtVersion(t *testing.T) {
 func TestPrepareConfigFile(t *testing.T) {
 	var nodeImage = "kindest/node:v1.20.7@sha256:cbeaf907fc78ac97ce7b625e4bf0de16e3ea725daf6b04f930bd14c67c671ff9"
 	cases := map[string]struct {
-		clusterName    string
-		nodesNum       int
-		kindConfigPath string
-		want           string
+		clusterName       string
+		nodesNum          int
+		kindConfigPath    string
+		disableDefaultCNI bool
+		want              string
 	}{
 		"one node": {
 			clusterName:    "case1",
@@ -123,6 +159,8 @@ func TestPrepareConfigFile(t *testing.T) {
 			want: `apiVersion: kind.x-k8s.io/v1alpha4
 kind: Cluster
 name: case1
+networking:
+  disableDefaultCNI: false
 nodes:
   - role: control-plane
     image: kindest/node:v1.20.7@sha256:cbeaf907fc78ac97ce7b625e4bf0de16e3ea725daf6b04f930bd14c67c671ff9`,
@@ -134,6 +172,24 @@ nodes:
 			want: `apiVersion: kind.x-k8s.io/v1alpha4
 kind: Cluster
 name: case2
+networking:
+  disableDefaultCNI: false
+nodes:
+  - role: control-plane
+    image: kindest/node:v1.20.7@sha256:cbeaf907fc78ac97ce7b625e4bf0de16e3ea725daf6b04f930bd14c67c671ff9
+  - role: worker
+    image: kindest/node:v1.20.7@sha256:cbeaf907fc78ac97ce7b625e4bf0de16e3ea725daf6b04f930bd14c67c671ff9`,
+		},
+		"disable default cni": {
+			clusterName:       "case3",
+			nodesNum:          2,
+			kindConfigPath:    "/tmp/prepareConfigFile.case3",
+			disableDefaultCNI: true,
+			want: `apiVersion: kind.x-k8s.io/v1alpha4
+kind: Cluster
+name: case3
+networking:
+  disableDefaultCNI: true
 nodes:
   - role: control-plane
     image: kindest/node:v1.20.7@sha256:cbeaf907fc78ac97ce7b625e4bf0de16e3ea725daf6b04f930bd14c67c671ff9
@@ -145,10 +201,11 @@ nodes:
 		initializer := newKindInitializer(
 			os.Stdout,
 			&initializerConfig{
-				ClusterName:    c.clusterName,
-				NodesNum:       c.nodesNum,
-				KindConfigPath: c.kindConfigPath,
-				NodeImage:      nodeImage,
+				ClusterName:       c.clusterName,
+				NodesNum:          c.nodesNum,
+				KindConfigPath:    c.kindConfigPath,
+				DisableDefaultCNI: c.disableDefaultCNI,
+				NodeImage:         nodeImage,
 			},
 		)
 		defer os.Remove(c.kindConfigPath)
@@ -168,18 +225,21 @@ nodes:
 }
 
 func TestKindOptions_Validate(t *testing.T) {
+	AllValidOpenYurtVersions = []string{"v0.6.0", "v0.7.0"}
 	cases1 := []struct {
 		nodeNum           int
 		kubernetesVersion string
 		openyurtVersion   string
 		ignoreErr         bool
-		want              string
+		wantErr           bool
+		description       string
 	}{
 		{
 			0,
 			"v1.22",
 			"v0.6.0",
 			false,
+			true,
 			"the number of nodes must be greater than 0",
 		},
 		{
@@ -187,14 +247,16 @@ func TestKindOptions_Validate(t *testing.T) {
 			"v1.10.1",
 			"v0.6.0",
 			false,
+			true,
 			"unsupported kubernetes version: v1.10.1",
 		},
 		{
 			3,
 			"v1.22",
-			"v0.1.0",
+			"v0.0.0",
 			false,
-			"v0.1.0 is not a valid openyurt version, all valid versions are v0.5.0,v0.6.0,v0.6.1,v0.6.2,v0.7.0,latest. If you know what you're doing, you can set --ignore-error",
+			true,
+			"v0.0.0 is not a valid openyurt version",
 		},
 	}
 
@@ -203,28 +265,35 @@ func TestKindOptions_Validate(t *testing.T) {
 		kubernetesVersion string
 		openyurtVersion   string
 		ignoreErr         bool
-		want              error
+		wantErr           bool
 	}{
 		{
 			2,
 			"v1.22",
 			"v0.6.0",
 			false,
-			nil,
+			false,
 		},
 		{
 			2,
 			"v1.22",
-			"v0.1.0",
+			"v0.6.0",
 			true,
-			nil,
+			false,
 		},
 		{
 			1,
 			"v1.22",
 			"v0.100.0",
 			true,
-			nil,
+			false,
+		},
+		{
+			1,
+			"v1.22",
+			"v0.100.0",
+			false,
+			true,
 		},
 	}
 
@@ -235,7 +304,7 @@ func TestKindOptions_Validate(t *testing.T) {
 		o.OpenYurtVersion = v.openyurtVersion
 		o.IgnoreError = v.ignoreErr
 		err := o.Validate()
-		if err.Error() != v.want {
+		if (v.wantErr && err == nil) || (!v.wantErr && err != nil) {
 			t.Errorf("failed vaildate")
 		}
 	}
@@ -246,7 +315,7 @@ func TestKindOptions_Validate(t *testing.T) {
 		o.OpenYurtVersion = v.openyurtVersion
 		o.IgnoreError = v.ignoreErr
 		err := o.Validate()
-		if err != v.want {
+		if (v.wantErr && err == nil) || (!v.wantErr && err != nil) {
 			t.Errorf("failed vaildate")
 		}
 	}
@@ -535,6 +604,7 @@ func TestInitializer_ConfigureCoreDnsAddon(t *testing.T) {
 		configObj     *corev1.ConfigMap
 		serviceObj    *corev1.Service
 		deploymentObj *v1.Deployment
+		nodeObj       *corev1.Node
 		want          interface{}
 	}{
 		configObj: &corev1.ConfigMap{
@@ -568,10 +638,15 @@ func TestInitializer_ConfigureCoreDnsAddon(t *testing.T) {
 				},
 			},
 		},
+		nodeObj: &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{
+				Name: "foo",
+			},
+		},
 		want: nil,
 	}
 
-	initializer.kubeClient = clientsetfake.NewSimpleClientset(case1.configObj, case1.serviceObj, case1.deploymentObj)
+	initializer.kubeClient = clientsetfake.NewSimpleClientset(case1.configObj, case1.serviceObj, case1.deploymentObj, case1.nodeObj)
 	err := initializer.configureCoreDnsAddon()
 	if err != case1.want {
 		t.Errorf("failed to configure core dns addon")
@@ -611,12 +686,13 @@ func TestInitializer_ConfigureAddons(t *testing.T) {
 		serviceObj       *corev1.Service
 		podObj           *corev1.Pod
 		deploymentObj    *v1.Deployment
+		nodeObjs         []*corev1.Node
 		want             interface{}
 	}{
 		coreDnsConfigObj: &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{Namespace: "kube-system", Name: "coredns"},
 			Data: map[string]string{
-				"Corefile": "{ cd .. \n hosts /etc/edge/tunnels-nodes \n  kubernetes cluster.local",
+				"Corefile": "{ cd .. \n hosts /etc/edge/tunnels-nodes \n  kubernetes cluster.local {",
 			},
 		},
 		proxyConfigObj: &corev1.ConfigMap{
@@ -665,12 +741,33 @@ func TestInitializer_ConfigureAddons(t *testing.T) {
 				AvailableReplicas:  3,
 			},
 		},
+		nodeObjs: []*corev1.Node{
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "foo1",
+				},
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "foo2",
+				},
+			},
+			{
+				ObjectMeta: metav1.ObjectMeta{
+					Name: "foo3",
+				},
+			},
+		},
 		want: nil,
 	}
 
 	var fakeOut io.Writer
 	initializer := newKindInitializer(fakeOut, newKindOptions().Config())
-	initializer.kubeClient = clientsetfake.NewSimpleClientset(case1.coreDnsConfigObj, case1.proxyConfigObj, case1.serviceObj, case1.podObj, case1.deploymentObj)
+	client := clientsetfake.NewSimpleClientset(case1.coreDnsConfigObj, case1.proxyConfigObj, case1.serviceObj, case1.podObj, case1.deploymentObj)
+	for i := range case1.nodeObjs {
+		client.Tracker().Add(case1.nodeObjs[i])
+	}
+	initializer.kubeClient = client
 	err := initializer.configureAddons()
 	if err != case1.want {
 		t.Errorf("failed to configure addons")

@@ -17,17 +17,15 @@ limitations under the License.
 package servicetopology
 
 import (
-	"io"
-
 	v1 "k8s.io/api/core/v1"
 	discovery "k8s.io/api/discovery/v1"
 	discoveryV1beta1 "k8s.io/api/discovery/v1beta1"
-	"k8s.io/apimachinery/pkg/watch"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	listers "k8s.io/client-go/listers/core/v1"
 	"k8s.io/klog/v2"
 
 	"github.com/openyurtio/openyurt/pkg/yurthub/filter"
-	"github.com/openyurtio/openyurt/pkg/yurthub/kubernetes/serializer"
 	nodepoolv1alpha1 "github.com/openyurtio/yurt-app-manager-api/pkg/yurtappmanager/apis/apps/v1alpha1"
 	appslisters "github.com/openyurtio/yurt-app-manager-api/pkg/yurtappmanager/client/listers/apps/v1alpha1"
 )
@@ -39,9 +37,12 @@ const (
 	AnnotationServiceTopologyValueNodePool = "openyurt.io/nodepool"
 )
 
+var (
+	topologyValueSets = sets.NewString(AnnotationServiceTopologyValueNode, AnnotationServiceTopologyValueZone, AnnotationServiceTopologyValueNodePool)
+)
+
 type serviceTopologyFilterHandler struct {
 	nodeName       string
-	serializer     *serializer.Serializer
 	serviceLister  listers.ServiceLister
 	nodePoolLister appslisters.NodePoolLister
 	nodeGetter     filter.NodeGetter
@@ -49,202 +50,247 @@ type serviceTopologyFilterHandler struct {
 
 func NewServiceTopologyFilterHandler(
 	nodeName string,
-	serializer *serializer.Serializer,
 	serviceLister listers.ServiceLister,
 	nodePoolLister appslisters.NodePoolLister,
-	nodeGetter filter.NodeGetter) filter.Handler {
+	nodeGetter filter.NodeGetter) filter.ObjectHandler {
 	return &serviceTopologyFilterHandler{
 		nodeName:       nodeName,
-		serializer:     serializer,
 		serviceLister:  serviceLister,
 		nodePoolLister: nodePoolLister,
 		nodeGetter:     nodeGetter,
 	}
-
 }
 
-//ObjectResponseFilter filter the endpointslice from get response object and return the bytes
-func (fh *serviceTopologyFilterHandler) ObjectResponseFilter(b []byte) ([]byte, error) {
-	eps, err := fh.serializer.Decode(b)
-	if err != nil || eps == nil {
-		klog.Errorf("skip filter, failed to decode response in ObjectResponseFilter of serviceTopologyFilterHandler, %v", err)
-		return b, nil
-	}
-
-	if endpointSliceList, ok := eps.(*discoveryV1beta1.EndpointSliceList); ok {
+// RuntimeObjectFilter filter the endpointSlice or endpoints from response object and return the filtered object
+func (fh *serviceTopologyFilterHandler) RuntimeObjectFilter(obj runtime.Object) (runtime.Object, bool) {
+	switch v := obj.(type) {
+	case *discoveryV1beta1.EndpointSliceList:
 		// filter endpointSlice before k8s 1.21
 		var items []discoveryV1beta1.EndpointSlice
-		for i := range endpointSliceList.Items {
-			item := fh.reassembleEndpointSliceV1beta1(&endpointSliceList.Items[i])
-			if item != nil {
-				items = append(items, *item)
-			}
+		for i := range v.Items {
+			eps := fh.serviceTopologyHandler(&v.Items[i]).(*discoveryV1beta1.EndpointSlice)
+			items = append(items, *eps)
 		}
-		endpointSliceList.Items = items
-
-		return fh.serializer.Encode(endpointSliceList)
-	} else if endpointSliceList, ok := eps.(*discovery.EndpointSliceList); ok {
-		// filter endpointSlice after k8s 1.21, include 1.21 version
+		v.Items = items
+		return v, false
+	case *discovery.EndpointSliceList:
 		var items []discovery.EndpointSlice
-		for i := range endpointSliceList.Items {
-			item := fh.reassembleEndpointSlice(&endpointSliceList.Items[i])
-			if item != nil {
-				items = append(items, *item)
-			}
+		for i := range v.Items {
+			eps := fh.serviceTopologyHandler(&v.Items[i]).(*discovery.EndpointSlice)
+			items = append(items, *eps)
 		}
-		endpointSliceList.Items = items
-
-		return fh.serializer.Encode(endpointSliceList)
-	} else {
-		return b, nil
+		v.Items = items
+		return v, false
+	case *v1.EndpointsList:
+		var items []v1.Endpoints
+		for i := range v.Items {
+			ep := fh.serviceTopologyHandler(&v.Items[i]).(*v1.Endpoints)
+			items = append(items, *ep)
+		}
+		v.Items = items
+		return v, false
+	case *v1.Endpoints, *discoveryV1beta1.EndpointSlice, *discovery.EndpointSlice:
+		return fh.serviceTopologyHandler(v), false
+	default:
+		return obj, false
 	}
 }
 
-//FilterWatchObject filter the endpointslice from watch response object and return the bytes
-func (fh *serviceTopologyFilterHandler) StreamResponseFilter(rc io.ReadCloser, ch chan watch.Event) error {
-	defer func() {
-		close(ch)
-	}()
+func (fh *serviceTopologyFilterHandler) serviceTopologyHandler(obj runtime.Object) runtime.Object {
+	needHandle, serviceTopologyType := fh.resolveServiceTopologyType(obj)
+	if !needHandle || len(serviceTopologyType) == 0 {
+		return obj
+	}
 
-	d, err := fh.serializer.WatchDecoder(rc)
+	switch serviceTopologyType {
+	case AnnotationServiceTopologyValueNode:
+		// close traffic on the same node
+		return fh.nodeTopologyHandler(obj)
+	case AnnotationServiceTopologyValueNodePool, AnnotationServiceTopologyValueZone:
+		// close traffic on the same node pool
+		return fh.nodePoolTopologyHandler(obj)
+	default:
+		return obj
+	}
+}
+
+func (fh *serviceTopologyFilterHandler) resolveServiceTopologyType(obj runtime.Object) (bool, string) {
+	var svcNamespace, svcName string
+	switch v := obj.(type) {
+	case *discoveryV1beta1.EndpointSlice:
+		svcNamespace = v.Namespace
+		svcName = v.Labels[discoveryV1beta1.LabelServiceName]
+	case *discovery.EndpointSlice:
+		svcNamespace = v.Namespace
+		svcName = v.Labels[discovery.LabelServiceName]
+	case *v1.Endpoints:
+		svcNamespace = v.Namespace
+		svcName = v.Name
+	default:
+		return false, ""
+	}
+
+	svc, err := fh.serviceLister.Services(svcNamespace).Get(svcName)
 	if err != nil {
-		klog.Errorf("StreamResponseFilter of serviceTopologyFilterHandler ended with error, %v", err)
-		return err
+		klog.Warningf("serviceTopologyFilterHandler: failed to get service %s/%s, err: %v", svcNamespace, svcName, err)
+		return false, ""
 	}
 
-	for {
-		watchType, obj, err := d.Decode()
-		if err != nil {
-			return err
-		}
+	if topologyValueSets.Has(svc.Annotations[AnnotationServiceTopologyKey]) {
+		return true, svc.Annotations[AnnotationServiceTopologyKey]
+	}
+	return false, ""
+}
 
-		var wEvent watch.Event
-		wEvent.Type = watchType
-
-		if endpointSlice, ok := obj.(*discoveryV1beta1.EndpointSlice); ok {
-			item := fh.reassembleEndpointSliceV1beta1(endpointSlice)
-			if item == nil {
-				continue
-			}
-			wEvent.Object = item
-			klog.V(5).Infof("filter watch decode endpointSlice: type: %s, obj=%#+v", watchType, endpointSlice)
-		} else if endpointSlice, ok := obj.(*discovery.EndpointSlice); ok {
-			item := fh.reassembleEndpointSlice(endpointSlice)
-			if item == nil {
-				continue
-			}
-			wEvent.Object = item
-			klog.V(5).Infof("filter watch decode endpointSlice: type: %s, obj=%#+v", watchType, endpointSlice)
-		} else {
-			wEvent.Object = obj
-		}
-
-		ch <- wEvent
+func (fh *serviceTopologyFilterHandler) nodeTopologyHandler(obj runtime.Object) runtime.Object {
+	switch v := obj.(type) {
+	case *discoveryV1beta1.EndpointSlice:
+		return reassembleV1beta1EndpointSlice(v, fh.nodeName, nil)
+	case *discovery.EndpointSlice:
+		return reassembleEndpointSlice(v, fh.nodeName, nil)
+	case *v1.Endpoints:
+		return reassembleEndpoints(v, fh.nodeName, nil)
+	default:
+		return obj
 	}
 }
 
-// reassembleEndpointSlice will discard endpointslice for LB service and filter the endpoints out of endpointslice in terms of service Topology.
-func (fh *serviceTopologyFilterHandler) reassembleEndpointSliceV1beta1(endpointSlice *discoveryV1beta1.EndpointSlice) *discoveryV1beta1.EndpointSlice {
-	var serviceTopologyType string
-	// get the service Topology type
-	if svcName, ok := endpointSlice.Labels[discoveryV1beta1.LabelServiceName]; ok {
-		svc, err := fh.serviceLister.Services(endpointSlice.Namespace).Get(svcName)
-		if err != nil {
-			klog.Infof("skip reassemble endpointSlice, failed to get service %s/%s, err: %v", endpointSlice.Namespace, svcName, err)
-			return endpointSlice
-		}
+func (fh *serviceTopologyFilterHandler) nodePoolTopologyHandler(obj runtime.Object) runtime.Object {
+	currentNode, err := fh.nodeGetter(fh.nodeName)
+	if err != nil {
+		klog.Warningf("skip serviceTopologyFilterHandler, failed to get current node %s, err: %v", fh.nodeName, err)
+		return obj
+	}
 
-		if serviceTopologyType, ok = svc.Annotations[AnnotationServiceTopologyKey]; !ok {
-			klog.Infof("skip reassemble endpointSlice, service %s/%s has no annotation %s", endpointSlice.Namespace, svcName, AnnotationServiceTopologyKey)
-			return endpointSlice
-		}
+	nodePoolName, ok := currentNode.Labels[nodepoolv1alpha1.LabelCurrentNodePool]
+	if !ok || len(nodePoolName) == 0 {
+		klog.Infof("node(%s) is not added into node pool, so fall into node topology", fh.nodeName)
+		return fh.nodeTopologyHandler(obj)
+	}
+
+	nodePool, err := fh.nodePoolLister.Get(nodePoolName)
+	if err != nil {
+		klog.Warningf("serviceTopologyFilterHandler: failed to get nodepool %s, err: %v", nodePoolName, err)
+		return obj
+	}
+
+	switch v := obj.(type) {
+	case *discoveryV1beta1.EndpointSlice:
+		return reassembleV1beta1EndpointSlice(v, "", nodePool)
+	case *discovery.EndpointSlice:
+		return reassembleEndpointSlice(v, "", nodePool)
+	case *v1.Endpoints:
+		return reassembleEndpoints(v, "", nodePool)
+	default:
+		return obj
+	}
+}
+
+// reassembleV1beta1EndpointSlice will discard endpoints that are not on the same node/nodePool for v1beta1.EndpointSlice
+func reassembleV1beta1EndpointSlice(endpointSlice *discoveryV1beta1.EndpointSlice, nodeName string, nodePool *nodepoolv1alpha1.NodePool) *discoveryV1beta1.EndpointSlice {
+	if len(nodeName) != 0 && nodePool != nil {
+		klog.Warningf("reassembleV1beta1EndpointSlice: nodeName(%s) and nodePool can not be set at the same time", nodeName)
+		return endpointSlice
 	}
 
 	var newEps []discoveryV1beta1.Endpoint
-	// if type of service Topology is 'kubernetes.io/hostname'
-	// filter the endpoint just on the local host
-	if serviceTopologyType == AnnotationServiceTopologyValueNode {
-		for i := range endpointSlice.Endpoints {
-			if endpointSlice.Endpoints[i].Topology[v1.LabelHostname] == fh.nodeName {
+	for i := range endpointSlice.Endpoints {
+		if len(nodeName) != 0 {
+			if endpointSlice.Endpoints[i].Topology[v1.LabelHostname] == nodeName {
 				newEps = append(newEps, endpointSlice.Endpoints[i])
 			}
 		}
-		endpointSlice.Endpoints = newEps
-	} else if serviceTopologyType == AnnotationServiceTopologyValueNodePool || serviceTopologyType == AnnotationServiceTopologyValueZone {
-		// if type of service Topology is openyurt.io/nodepool
-		// filter the endpoint just on the node which is in the same nodepool with current node
-		currentNode, err := fh.nodeGetter(fh.nodeName)
-		if err != nil {
-			klog.Infof("skip reassemble endpointSlice, failed to get current node %s, err: %v", fh.nodeName, err)
-			return endpointSlice
-		}
-		if nodePoolName, ok := currentNode.Labels[nodepoolv1alpha1.LabelCurrentNodePool]; ok {
-			nodePool, err := fh.nodePoolLister.Get(nodePoolName)
-			if err != nil {
-				klog.Infof("skip reassemble endpointSlice, failed to get nodepool %s, err: %v", nodePoolName, err)
-				return endpointSlice
+
+		if nodePool != nil {
+			if inSameNodePool(endpointSlice.Endpoints[i].Topology[v1.LabelHostname], nodePool.Status.Nodes) {
+				newEps = append(newEps, endpointSlice.Endpoints[i])
 			}
-			for i := range endpointSlice.Endpoints {
-				if inSameNodePool(endpointSlice.Endpoints[i].Topology[v1.LabelHostname], nodePool.Status.Nodes) {
-					newEps = append(newEps, endpointSlice.Endpoints[i])
-				}
-			}
-			endpointSlice.Endpoints = newEps
 		}
 	}
+
+	// even no endpoints left, empty endpoints slice should be returned
+	endpointSlice.Endpoints = newEps
 	return endpointSlice
 }
 
-// reassembleEndpointSlice will discard endpointslice for LB service and filter the endpoints out of endpointslice in terms of service Topology.
-func (fh *serviceTopologyFilterHandler) reassembleEndpointSlice(endpointSlice *discovery.EndpointSlice) *discovery.EndpointSlice {
-	var serviceTopologyType string
-	// get the service Topology type
-	if svcName, ok := endpointSlice.Labels[discovery.LabelServiceName]; ok {
-		svc, err := fh.serviceLister.Services(endpointSlice.Namespace).Get(svcName)
-		if err != nil {
-			klog.Infof("skip reassemble endpointSlice, failed to get service %s/%s, err: %v", endpointSlice.Namespace, svcName, err)
-			return endpointSlice
-		}
-
-		if serviceTopologyType, ok = svc.Annotations[AnnotationServiceTopologyKey]; !ok {
-			klog.Infof("skip reassemble endpointSlice, service %s/%s has no annotation %s", endpointSlice.Namespace, svcName, AnnotationServiceTopologyKey)
-			return endpointSlice
-		}
+// reassembleEndpointSlice will discard endpoints that are not on the same node/nodePool for v1.EndpointSlice
+func reassembleEndpointSlice(endpointSlice *discovery.EndpointSlice, nodeName string, nodePool *nodepoolv1alpha1.NodePool) *discovery.EndpointSlice {
+	if len(nodeName) != 0 && nodePool != nil {
+		klog.Warningf("reassembleEndpointSlice: nodeName(%s) and nodePool can not be set at the same time", nodeName)
+		return endpointSlice
 	}
 
 	var newEps []discovery.Endpoint
-	// if type of service Topology is 'kubernetes.io/hostname'
-	// filter the endpoint just on the local host
-	if serviceTopologyType == AnnotationServiceTopologyValueNode {
-		for i := range endpointSlice.Endpoints {
-			if *endpointSlice.Endpoints[i].NodeName == fh.nodeName {
+	for i := range endpointSlice.Endpoints {
+		if len(nodeName) != 0 {
+			if *endpointSlice.Endpoints[i].NodeName == nodeName {
 				newEps = append(newEps, endpointSlice.Endpoints[i])
 			}
 		}
-		endpointSlice.Endpoints = newEps
-	} else if serviceTopologyType == AnnotationServiceTopologyValueNodePool || serviceTopologyType == AnnotationServiceTopologyValueZone {
-		// if type of service Topology is openyurt.io/nodepool
-		// filter the endpoint just on the node which is in the same nodepool with current node
-		currentNode, err := fh.nodeGetter(fh.nodeName)
-		if err != nil {
-			klog.Infof("skip reassemble endpointSlice, failed to get current node %s, err: %v", fh.nodeName, err)
-			return endpointSlice
-		}
-		if nodePoolName, ok := currentNode.Labels[nodepoolv1alpha1.LabelCurrentNodePool]; ok {
-			nodePool, err := fh.nodePoolLister.Get(nodePoolName)
-			if err != nil {
-				klog.Infof("skip reassemble endpointSlice, failed to get nodepool %s, err: %v", nodePoolName, err)
-				return endpointSlice
+
+		if nodePool != nil {
+			if inSameNodePool(*endpointSlice.Endpoints[i].NodeName, nodePool.Status.Nodes) {
+				newEps = append(newEps, endpointSlice.Endpoints[i])
 			}
-			for i := range endpointSlice.Endpoints {
-				if inSameNodePool(*endpointSlice.Endpoints[i].NodeName, nodePool.Status.Nodes) {
-					newEps = append(newEps, endpointSlice.Endpoints[i])
-				}
-			}
-			endpointSlice.Endpoints = newEps
 		}
 	}
+
+	// even no endpoints left, empty endpoints slice should be returned
+	endpointSlice.Endpoints = newEps
 	return endpointSlice
+}
+
+// reassembleEndpoints will discard subset that are not on the same node/nodePool for v1.Endpoints
+func reassembleEndpoints(endpoints *v1.Endpoints, nodeName string, nodePool *nodepoolv1alpha1.NodePool) *v1.Endpoints {
+	if len(nodeName) != 0 && nodePool != nil {
+		klog.Warningf("reassembleEndpoints: nodeName(%s) and nodePool can not be set at the same time", nodeName)
+		return endpoints
+	}
+
+	var newEpSubsets []v1.EndpointSubset
+	for i := range endpoints.Subsets {
+		if len(nodeName) != 0 {
+			endpoints.Subsets[i].Addresses = filterValidEndpointsAddr(endpoints.Subsets[i].Addresses, nodeName, nil)
+			endpoints.Subsets[i].NotReadyAddresses = filterValidEndpointsAddr(endpoints.Subsets[i].NotReadyAddresses, nodeName, nil)
+		}
+
+		if nodePool != nil {
+			endpoints.Subsets[i].Addresses = filterValidEndpointsAddr(endpoints.Subsets[i].Addresses, "", nodePool)
+			endpoints.Subsets[i].NotReadyAddresses = filterValidEndpointsAddr(endpoints.Subsets[i].NotReadyAddresses, "", nodePool)
+		}
+
+		if len(endpoints.Subsets[i].Addresses) != 0 || len(endpoints.Subsets[i].NotReadyAddresses) != 0 {
+			newEpSubsets = append(newEpSubsets, endpoints.Subsets[i])
+		}
+	}
+
+	// even no subsets left, empty subset slice should be returned
+	endpoints.Subsets = newEpSubsets
+	return endpoints
+}
+
+func filterValidEndpointsAddr(addresses []v1.EndpointAddress, nodeName string, nodePool *nodepoolv1alpha1.NodePool) []v1.EndpointAddress {
+	var newEpAddresses []v1.EndpointAddress
+	for i := range addresses {
+		if addresses[i].NodeName == nil {
+			continue
+		}
+
+		// filter address on the same node
+		if len(nodeName) != 0 {
+			if nodeName == *addresses[i].NodeName {
+				newEpAddresses = append(newEpAddresses, addresses[i])
+			}
+		}
+
+		// filter address on the same node pool
+		if nodePool != nil {
+			if inSameNodePool(*addresses[i].NodeName, nodePool.Status.Nodes) {
+				newEpAddresses = append(newEpAddresses, addresses[i])
+			}
+		}
+	}
+	return newEpAddresses
 }
 
 func inSameNodePool(nodeName string, nodeList []string) bool {

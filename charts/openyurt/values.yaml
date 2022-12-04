@@ -8,7 +8,7 @@ yurtControllerManager:
     registry: docker.io
     repository: openyurt/yurt-controller-manager
     pullPolicy: IfNotPresent
-    tag: v0.7.0
+    tag: v1.1.0
   service:
     type: ClusterIP
     port: 80
@@ -16,19 +16,25 @@ yurtControllerManager:
 yurtTunnelAgent:
   replicaCount: 1
   tolerations: []
+  parameters:
+    tunnelserverAddr: ""
   image:
     registry: docker.io
     repository: openyurt/yurt-tunnel-agent
     pullPolicy: IfNotPresent
-    tag: v0.7.0
+    tag: v1.1.0
 
 yurtTunnelServer:
   replicaCount: 1
   tolerations: []
+  parameters:
+    certDnsNames: ""
+    certIps: ""
   image:
     registry: docker.io
     repository: openyurt/yurt-tunnel-server
     pullPolicy: IfNotPresent
-    tag: v0.7.0
+    tag: v1.1.0
 
-
+yurtHub:
+  cacheAgents: ""

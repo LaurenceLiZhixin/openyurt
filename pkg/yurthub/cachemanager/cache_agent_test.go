@@ -17,6 +17,7 @@ limitations under the License.
 package cachemanager
 
 import (
+	"strings"
 	"testing"
 
 	"k8s.io/apimachinery/pkg/util/sets"
@@ -50,6 +51,12 @@ func TestUpdateCacheAgents(t *testing.T) {
 			resultAgents:  sets.NewString(append([]string{"agent1", "agent2"}, util.DefaultCacheAgents...)...),
 			deletedAgents: sets.String{},
 		},
+		"no agents updated with default": {
+			initAgents:    []string{"agent1", "agent2", "kubelet"},
+			cacheAgents:   "agent1,agent2",
+			resultAgents:  sets.NewString(append([]string{"agent1", "agent2"}, util.DefaultCacheAgents...)...),
+			deletedAgents: sets.String{},
+		},
 		"empty agents added ": {
 			initAgents:    []string{},
 			cacheAgents:   "",
@@ -59,9 +66,11 @@ func TestUpdateCacheAgents(t *testing.T) {
 	}
 	for k, tt := range testcases {
 		t.Run(k, func(t *testing.T) {
-			m := &cacheManager{
-				cacheAgents: sets.NewString(tt.initAgents...),
+			m := &CacheAgent{
+				agents: sets.NewString(tt.initAgents...),
 			}
+
+			m.updateCacheAgents(strings.Join(tt.initAgents, ","), "")
 
 			// add agents
 			deletedAgents := m.updateCacheAgents(tt.cacheAgents, "")
@@ -70,8 +79,8 @@ func TestUpdateCacheAgents(t *testing.T) {
 				t.Errorf("Got deleted agents: %v, expect agents: %v", deletedAgents, tt.deletedAgents)
 			}
 
-			if !m.cacheAgents.Equal(tt.resultAgents) {
-				t.Errorf("Got cache agents: %v, expect agents: %v", m.cacheAgents, tt.resultAgents)
+			if !m.agents.Equal(tt.resultAgents) {
+				t.Errorf("Got cache agents: %v, expect agents: %v", m.agents, tt.resultAgents)
 			}
 		})
 	}

@@ -24,9 +24,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strings"
 
+	"github.com/pkg/errors"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/endpoints/handlers/negotiation"
@@ -164,18 +164,6 @@ func ReqInfoString(info *apirequest.RequestInfo) string {
 	return fmt.Sprintf("%s %s for %s", info.Verb, info.Resource, info.Path)
 }
 
-// IsKubeletLeaseReq judge whether the request is a lease request from kubelet
-func IsKubeletLeaseReq(req *http.Request) bool {
-	ctx := req.Context()
-	if comp, ok := ClientComponentFrom(ctx); !ok || comp != "kubelet" {
-		return false
-	}
-	if info, ok := apirequest.RequestInfoFrom(ctx); !ok || info.Resource != "leases" {
-		return false
-	}
-	return true
-}
-
 // WriteObject write object to response writer
 func WriteObject(statusCode int, obj runtime.Object, w http.ResponseWriter, req *http.Request) error {
 	ctx := req.Context()
@@ -190,22 +178,6 @@ func WriteObject(statusCode int, obj runtime.Object, w http.ResponseWriter, req 
 	}
 
 	return fmt.Errorf("request info is not found when write object, %s", ReqString(req))
-}
-
-// Err write err to response writer
-func Err(err error, w http.ResponseWriter, req *http.Request) {
-	ctx := req.Context()
-	if info, ok := apirequest.RequestInfoFrom(ctx); ok {
-		gv := schema.GroupVersion{
-			Group:   info.APIGroup,
-			Version: info.APIVersion,
-		}
-		negotiatedSerializer := serializer.YurtHubSerializer.GetNegotiatedSerializer(gv.WithResource(info.Resource))
-		responsewriters.ErrorNegotiated(err, negotiatedSerializer, gv, w, req)
-		return
-	}
-
-	klog.Errorf("request info is not found when err write, %s", ReqString(req))
 }
 
 // NewDualReadCloser create an dualReadCloser object
@@ -276,19 +248,6 @@ func (dr *dualReadCloser) Close() error {
 	return nil
 }
 
-// KeyFunc combine comp resource ns name into a key
-func KeyFunc(comp, resource, ns, name string) (string, error) {
-	if comp == "" || resource == "" {
-		return "", fmt.Errorf("createKey: comp, resource can not be empty")
-	}
-
-	if "namespaces" == resource {
-		return filepath.Join(comp, resource, name), nil
-	}
-
-	return filepath.Join(comp, resource, ns, name), nil
-}
-
 // SplitKey split key into comp, resource, ns, name
 func SplitKey(key string) (comp, resource, ns, name string) {
 	if len(key) == 0 {
@@ -348,6 +307,9 @@ func FileExists(filename string) (bool, error) {
 
 // LoadKubeletRestClientConfig load *rest.Config for accessing healthyServer
 func LoadKubeletRestClientConfig(healthyServer *url.URL, kubeletRootCAFilePath, kubeletPairFilePath string) (*rest.Config, error) {
+	if healthyServer == nil {
+		return nil, errors.New("healthyServer cannot be nil")
+	}
 	tlsClientConfig := rest.TLSClientConfig{}
 	if _, err := certutil.NewPool(kubeletRootCAFilePath); err != nil {
 		klog.Errorf("Expected to load root CA config from %s, but got err: %v", kubeletRootCAFilePath, err)
@@ -394,6 +356,9 @@ func LoadKubeConfig(kubeconfig string) (*clientcmdapi.Config, error) {
 }
 
 func CreateKubeConfigFile(kubeClientConfig *rest.Config, kubeconfigPath string) error {
+	if kubeClientConfig == nil {
+		return fmt.Errorf("kube client config cannot be nil")
+	}
 	// Get the CA data from the bootstrap client config.
 	caFile, caData := kubeClientConfig.CAFile, []byte{}
 	if len(caFile) == 0 {

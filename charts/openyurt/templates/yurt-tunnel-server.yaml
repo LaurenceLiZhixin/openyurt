@@ -123,11 +123,9 @@ metadata:
 spec:
   type: NodePort
   ports:
-    - port: 10263
-      targetPort: 10263
-      name: https
     - port: 10262
       targetPort: 10262
+      nodePort: 31008
       name: tcp
   selector:
     k8s-app: yurt-tunnel-server
@@ -189,8 +187,8 @@ spec:
       tolerations:
         - operator: "Exists"
       nodeSelector:
-        beta.kubernetes.io/arch: amd64
-        beta.kubernetes.io/os: linux
+        kubernetes.io/arch: amd64
+        kubernetes.io/os: linux
         openyurt.io/is-edge-worker: "false"
       containers:
         - name: yurt-tunnel-server
@@ -202,6 +200,8 @@ spec:
             - --bind-address=$(NODE_IP)
             - --insecure-bind-address=$(NODE_IP)
             - --proxy-strategy=destHost
+            - --cert-dns-names={{ .Values.yurtTunnelServer.parameters.certDnsNames }}
+            - --cert-ips={{ .Values.yurtTunnelServer.parameters.certIps }}
             - --v=2
           env:
             - name: NODE_IP

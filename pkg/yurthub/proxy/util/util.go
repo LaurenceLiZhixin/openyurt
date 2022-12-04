@@ -30,10 +30,15 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apiserver/pkg/authentication/serviceaccount"
+	"k8s.io/apiserver/pkg/endpoints/handlers/negotiation"
+	"k8s.io/apiserver/pkg/endpoints/handlers/responsewriters"
 	apirequest "k8s.io/apiserver/pkg/endpoints/request"
 	"k8s.io/klog/v2"
 
+	"github.com/openyurtio/openyurt/pkg/yurthub/kubernetes/serializer"
 	"github.com/openyurtio/openyurt/pkg/yurthub/metrics"
 	"github.com/openyurtio/openyurt/pkg/yurthub/tenant"
 	"github.com/openyurtio/openyurt/pkg/yurthub/util"
@@ -208,21 +213,53 @@ func (wrw *wrapperResponseWriter) WriteHeader(statusCode int) {
 	wrw.ResponseWriter.WriteHeader(statusCode)
 }
 
-// WithRequestTrace used to trace status code and handle time for request.
+// WithRequestTrace used to trace
+// status code and
+// latency for outward requests redirected from proxyserver to apiserver
 func WithRequestTrace(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		info, ok := apirequest.RequestInfoFrom(req.Context())
 		client, _ := util.ClientComponentFrom(req.Context())
-		if ok && info.IsResourceRequest {
-			metrics.Metrics.IncInFlightRequests(info.Verb, info.Resource, info.Subresource, client)
-			defer metrics.Metrics.DecInFlightRequests(info.Verb, info.Resource, info.Subresource, client)
+		if ok {
+			if info.IsResourceRequest {
+				metrics.Metrics.IncInFlightRequests(info.Verb, info.Resource, info.Subresource, client)
+				defer metrics.Metrics.DecInFlightRequests(info.Verb, info.Resource, info.Subresource, client)
+			}
+		} else {
+			info = &apirequest.RequestInfo{}
 		}
 		wrapperRW := newWrapperResponseWriter(w)
+
 		start := time.Now()
 		defer func() {
-			klog.Infof("%s with status code %d, spent %v", util.ReqString(req), wrapperRW.statusCode, time.Since(start))
+			duration := time.Since(start)
+			klog.Infof("%s with status code %d, spent %v", util.ReqString(req), wrapperRW.statusCode, duration)
+			// 'watch' & 'proxy' requets don't need to be monitored in metrics
+			if info.Verb != "proxy" && info.Verb != "watch" {
+				metrics.Metrics.SetProxyLatencyCollector(client, info.Verb, info.Resource, info.Subresource, metrics.Apiserver_latency, int64(duration))
+			}
 		}()
 		handler.ServeHTTP(wrapperRW, req)
+	})
+}
+
+// WithRequestTraceFull used to trace the entire duration: coming to yurthub -> yurthub to apiserver -> leaving yurthub
+func WithRequestTraceFull(handler http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+		info, ok := apirequest.RequestInfoFrom(req.Context())
+		if !ok {
+			info = &apirequest.RequestInfo{}
+		}
+		client, _ := util.ClientComponentFrom(req.Context())
+		start := time.Now()
+		defer func() {
+			duration := time.Since(start)
+			// 'watch' & 'proxy' requets don't need to be monitored in metrics
+			if info.Verb != "proxy" && info.Verb != "watch" {
+				metrics.Metrics.SetProxyLatencyCollector(client, info.Verb, info.Resource, info.Subresource, metrics.Full_lantency, int64(duration))
+			}
+		}()
+		handler.ServeHTTP(w, req)
 	})
 }
 
@@ -248,7 +285,7 @@ func WithMaxInFlightLimit(handler http.Handler, limit int) http.Handler {
 			klog.Errorf("Too many requests, please try again later, %s", util.ReqString(req))
 			metrics.Metrics.IncRejectedRequestCounter()
 			w.Header().Set("Retry-After", "1")
-			util.Err(errors.NewTooManyRequestsError("Too many requests, please try again later."), w, req)
+			Err(errors.NewTooManyRequestsError("Too many requests, please try again later."), w, req)
 		}
 	})
 }
@@ -260,7 +297,6 @@ func WithMaxInFlightLimit(handler http.Handler, limit int) http.Handler {
 // 2. WithRequestTimeout reduce timeout context for get/list request.
 //    timeout is Timeout reduce a margin(2 seconds). When request remote server fail,
 //    can get data from cache before client timeout.
-
 func WithRequestTimeout(handler http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		if info, ok := apirequest.RequestInfoFrom(req.Context()); ok {
@@ -270,7 +306,7 @@ func WithRequestTimeout(handler http.Handler) http.Handler {
 					opts := metainternalversion.ListOptions{}
 					if err := metainternalversionscheme.ParameterCodec.DecodeParameters(req.URL.Query(), metav1.SchemeGroupVersion, &opts); err != nil {
 						klog.Errorf("failed to decode parameter for list/watch request: %s", util.ReqString(req))
-						util.Err(errors.NewBadRequest(err.Error()), w, req)
+						Err(errors.NewBadRequest(err.Error()), w, req)
 						return
 					}
 					if opts.TimeoutSeconds != nil {
@@ -332,4 +368,68 @@ func WithSaTokenSubstitute(handler http.Handler, tenantMgr tenant.Interface) htt
 
 		handler.ServeHTTP(w, req)
 	})
+}
+
+// IsListRequestWithNameFieldSelector will check if the request has FieldSelector "metadata.name".
+// If found, return true, otherwise false.
+func IsListRequestWithNameFieldSelector(req *http.Request) bool {
+	ctx := req.Context()
+	if info, ok := apirequest.RequestInfoFrom(ctx); ok {
+		if info.IsResourceRequest && info.Verb == "list" {
+			opts := metainternalversion.ListOptions{}
+			if err := metainternalversionscheme.ParameterCodec.DecodeParameters(req.URL.Query(), metav1.SchemeGroupVersion, &opts); err == nil {
+				if opts.FieldSelector == nil {
+					return false
+				}
+				if _, found := opts.FieldSelector.RequiresExactMatch("metadata.name"); found {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+// IsKubeletLeaseReq judge whether the request is a lease request from kubelet
+func IsKubeletLeaseReq(req *http.Request) bool {
+	ctx := req.Context()
+	if comp, ok := util.ClientComponentFrom(ctx); !ok || comp != "kubelet" {
+		return false
+	}
+	if info, ok := apirequest.RequestInfoFrom(ctx); !ok || info.Resource != "leases" {
+		return false
+	}
+	return true
+}
+
+// WriteObject write object to response writer
+func WriteObject(statusCode int, obj runtime.Object, w http.ResponseWriter, req *http.Request) error {
+	ctx := req.Context()
+	if info, ok := apirequest.RequestInfoFrom(ctx); ok {
+		gv := schema.GroupVersion{
+			Group:   info.APIGroup,
+			Version: info.APIVersion,
+		}
+		negotiatedSerializer := serializer.YurtHubSerializer.GetNegotiatedSerializer(gv.WithResource(info.Resource))
+		responsewriters.WriteObjectNegotiated(negotiatedSerializer, negotiation.DefaultEndpointRestrictions, gv, w, req, statusCode, obj)
+		return nil
+	}
+
+	return fmt.Errorf("request info is not found when write object, %s", util.ReqString(req))
+}
+
+// Err write err to response writer
+func Err(err error, w http.ResponseWriter, req *http.Request) {
+	ctx := req.Context()
+	if info, ok := apirequest.RequestInfoFrom(ctx); ok {
+		gv := schema.GroupVersion{
+			Group:   info.APIGroup,
+			Version: info.APIVersion,
+		}
+		negotiatedSerializer := serializer.YurtHubSerializer.GetNegotiatedSerializer(gv.WithResource(info.Resource))
+		responsewriters.ErrorNegotiated(err, negotiatedSerializer, gv, w, req)
+		return
+	}
+
+	klog.Errorf("request info is not found when err write, %s", util.ReqString(req))
 }

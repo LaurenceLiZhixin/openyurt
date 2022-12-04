@@ -150,9 +150,6 @@ metadata:
 spec:
   type: NodePort 
   ports:
-  - port: 10263
-    targetPort: 10263
-    name: https
   - port: 10262
     targetPort: 10262
     nodePort: 31008
@@ -221,7 +218,7 @@ spec:
       tolerations:
       - operator: "Exists"
       nodeSelector:
-        beta.kubernetes.io/os: linux
+        kubernetes.io/os: linux
         {{.edgeWorkerLabel}}: "false"
       containers:
       - name: yurt-tunnel-server

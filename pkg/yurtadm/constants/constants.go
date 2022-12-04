@@ -24,34 +24,101 @@ const (
 	YurttunnelAgentComponentName    = "yurt-tunnel-agent"
 	YurttunnelNamespace             = "kube-system"
 
+	Hostname                 = "/etc/hostname"
 	SysctlK8sConfig          = "/etc/sysctl.d/k8s.conf"
+	StaticPodPath            = "/etc/kubernetes/manifests"
 	KubeletConfigureDir      = "/etc/kubernetes"
 	KubeletWorkdir           = "/var/lib/kubelet"
 	YurtHubWorkdir           = "/var/lib/yurthub"
+	OpenyurtDir              = "/var/lib/openyurt"
 	YurttunnelAgentWorkdir   = "/var/lib/yurttunnel-agent"
 	YurttunnelServerWorkdir  = "/var/lib/yurttunnel-server"
+	KubeCondfigPath          = "/etc/kubernetes/kubelet.conf"
 	KubeCniDir               = "/opt/cni/bin"
 	KubeCniVersion           = "v0.8.0"
 	KubeletServiceFilepath   = "/etc/systemd/system/kubelet.service"
 	KubeletServiceConfPath   = "/etc/systemd/system/kubelet.service.d/10-kubeadm.conf"
+	KubeletSvcPath           = "/usr/lib/systemd/system/kubelet.service.d/10-kubeadm.conf"
 	YurthubStaticPodFileName = "yurthub.yaml"
 	PauseImagePath           = "registry.cn-hangzhou.aliyuncs.com/google_containers/pause:3.2"
+	DefaultCertificatesDir   = "/etc/kubernetes/pki"
+	DefaultDockerCRISocket   = "/var/run/dockershim.sock"
+	YurthubYamlName          = "yurt-hub.yaml"
+	// ManifestsSubDirName defines directory name to store manifests
+	ManifestsSubDirName = "manifests"
+	// KubeletKubeConfigFileName defines the file name for the kubeconfig that the control-plane kubelet will use for talking
+	// to the API server
+	KubeletKubeConfigFileName = "kubelet.conf"
+	// KubeadmConfigConfigMap specifies in what ConfigMap in the kube-system namespace the `kubeadm init` configuration should be stored
+	KubeadmConfigConfigMap = "kubeadm-config"
+	// ClusterConfigurationConfigMapKey specifies in what ConfigMap key the cluster configuration should be stored
+	ClusterConfigurationConfigMapKey = "ClusterConfiguration"
+	// KubeadmJoinConfigFileName defines the file name for the JoinConfiguration that kubeadm will use for joining
+	KubeadmJoinConfigFileName = "kubeadm-join.conf"
+	// KubeadmJoinDiscoveryFileName defines the file name for the --discovery-file that kubeadm will use for joining
+	KubeadmJoinDiscoveryFileName = "discovery.conf"
+
+	KubeletHostname        = "--hostname-override=[^\"\\s]*"
+	KubeletEnvironmentFile = "EnvironmentFile=.*"
+
+	DaemonReload      = "systemctl daemon-reload"
+	RestartKubeletSvc = "systemctl restart kubelet"
 
 	CniUrlFormat                    = "https://aliacs-edge-k8s-cn-hangzhou.oss-cn-hangzhou.aliyuncs.com/public/pkg/openyurt/cni/%s/cni-plugins-linux-%s-%s.tgz"
 	DefaultKubernetesResourceServer = "dl.k8s.io"
-	KubeUrlFormat                   = "https://%s/%s/kubernetes-node-linux-%s.tar.gz"
+	KubeadmUrlFormat                = "https://%s/release/%s/bin/linux/%s/kubeadm"
+	KubeletUrlFormat                = "https://%s/release/%s/bin/linux/%s/kubelet"
 	TmpDownloadDir                  = "/tmp"
+	KubeadmInstallUrl               = "https://kubernetes.io/docs/setup/production-environment/tools/kubeadm/install-kubeadm/"
 	FlannelIntallFile               = "https://aliacs-edge-k8s-cn-hangzhou.oss-cn-hangzhou.aliyuncs.com/public/pkg/openyurt/flannel.yaml"
 
 	EdgeNode  = "edge"
 	CloudNode = "cloud"
 
+	// AdminKubeConfigPath
+	AdminKubeConfigPath = "/etc/kubernetes/admin.conf"
+	// CertificatesDir
+	CertificatesDir = "cert-dir"
+	// ForceReset
+	ForceReset = "force"
+	// IgnorePreflightErrors sets the path a list of checks whose errors will be shown as warnings. Example: 'IsPrivilegedUser,Swap'. Value 'all' ignores errors from all checks.
+	IgnorePreflightErrors = "ignore-preflight-errors"
+	// kubeconfigPath
+	KubeconfigPath = "kubeconfig"
+	// KubernetesResourceServer flag sets the address for download k8s node resources.
+	KubernetesResourceServer = "kubernetes-resource-server"
+	// NodeCRISocket flag sets the CRI socket to connect to.
+	NodeCRISocket = "cri-socket"
+	// NodeLabels flag sets the labels for worker node.
+	NodeLabels = "node-labels"
+	// NodeName flag sets the node name.
+	NodeName = "node-name"
+	// NodeType flag sets the type of worker node to edge or cloud.
+	NodeType = "node-type"
+	// Organizations flag sets the extra organizations of hub agent client certificate.
+	Organizations = "organizations"
+	// PauseImage flag sets the pause image for worker node.
+	PauseImage = "pause-image"
+	// TokenStr flags sets both the discovery-token and the tls-bootstrap-token when those values are not provided
+	TokenStr = "token"
+	// TokenDiscoveryCAHash flag instruct kubeadm to validate that the root CA public key matches this hash (for token-based discovery)
+	TokenDiscoveryCAHash = "discovery-token-ca-cert-hash"
+	// TokenDiscoverySkipCAHash flag instruct kubeadm to skip CA hash verification (for token-based discovery)
+	TokenDiscoverySkipCAHash = "discovery-token-unsafe-skip-ca-verification"
+	// YurtHubImage flag sets the yurthub image for worker node.
+	YurtHubImage = "yurthub-image"
+	// YurtHubServerAddr flag set the address of yurthub server (not proxy server!)
+	YurtHubServerAddr = "yurthub-server-addr"
+
+	ServerHealthzServer          = "127.0.0.1:10267"
+	ServerHealthzURLPath         = "/v1/healthz"
 	DefaultOpenYurtImageRegistry = "registry.cn-hangzhou.aliyuncs.com/openyurt"
 	DefaultOpenYurtVersion       = "latest"
 	YurtControllerManager        = "yurt-controller-manager"
 	YurtTunnelServer             = "yurt-tunnel-server"
 	YurtTunnelAgent              = "yurt-tunnel-agent"
 	Yurthub                      = "yurthub"
+	DefaultYurtHubServerAddr     = "127.0.0.1"
 	YurtAppManager               = "yurt-app-manager"
 	YurtAppManagerNamespace      = "kube-system"
 	DirMode                      = 0755
@@ -97,6 +164,37 @@ current-context: default-context
 kind: Config
 preferences: {}
 `
+
+	KubeadmJoinConf = `
+apiVersion: kubeadm.k8s.io/v1beta3
+kind: JoinConfiguration
+discovery:
+  file:
+    kubeConfigPath: {{.kubeConfigPath}}
+  tlsBootstrapToken: {{.tlsBootstrapToken}}
+nodeRegistration:
+  criSocket: {{.criSocket}}
+  name: {{.name}}
+  ignorePreflightErrors:
+    - FileAvailable--etc-kubernetes-kubelet.conf
+    {{- range $index, $value := .ignorePreflightErrors}}
+    - {{$value}}
+    {{- end}}
+  kubeletExtraArgs:
+    rotate-certificates: "false"
+    pod-infra-container-image: {{.podInfraContainerImage}}
+    node-labels: {{.nodeLabels}}
+    {{- if .networkPlugin}}
+    network-plugin: {{.networkPlugin}}
+    {{end}}
+    {{- if .containerRuntime}}
+    container-runtime: {{.containerRuntime}}
+    {{end}}
+    {{- if .containerRuntimeEndpoint}}
+    container-runtime-endpoint: {{.containerRuntimeEndpoint}}
+    {{end}}
+`
+
 	// DisableNodeControllerJobTemplate defines the node-controller disable job in yaml format
 	DisableNodeControllerJobTemplate = `
 apiVersion: batch/v1
@@ -123,6 +221,84 @@ spec:
         securityContext:
           privileged: true
 `
+
+	YurthubTemplate = `
+apiVersion: v1
+kind: Pod
+metadata:
+  labels:
+    k8s-app: yurt-hub
+  name: yurt-hub
+  namespace: kube-system
+spec:
+  volumes:
+  - name: hub-dir
+    hostPath:
+      path: /var/lib/yurthub
+      type: DirectoryOrCreate
+  - name: kubernetes
+    hostPath:
+      path: /etc/kubernetes
+      type: Directory
+  - name: pem-dir
+    hostPath:
+      path: /var/lib/kubelet/pki
+      type: Directory
+  containers:
+  - name: yurt-hub
+    image: {{.image}}
+    imagePullPolicy: IfNotPresent
+    volumeMounts:
+    - name: hub-dir
+      mountPath: /var/lib/yurthub
+    - name: kubernetes
+      mountPath: /etc/kubernetes
+    - name: pem-dir
+      mountPath: /var/lib/kubelet/pki
+    command:
+    - yurthub
+    - --v=2
+    - --bind-address={{.yurthubServerAddr}}
+    - --server-addr={{.kubernetesServerAddr}}
+    - --node-name=$(NODE_NAME)
+    - --join-token={{.joinToken}}
+    - --working-mode={{.workingMode}}
+      {{if .enableDummyIf }}
+    - --enable-dummy-if={{.enableDummyIf}}
+      {{end}}
+      {{if .enableNodePool }}
+    - --enable-node-pool={{.enableNodePool}}
+      {{end}}
+      {{if .organizations }}
+    - --hub-cert-organizations={{.organizations}}
+      {{end}}
+    livenessProbe:
+      httpGet:
+        host: {{.yurthubServerAddr}}
+        path: /v1/healthz
+        port: 10267
+      initialDelaySeconds: 300
+      periodSeconds: 5
+      failureThreshold: 3
+    resources:
+      requests:
+        cpu: 150m
+        memory: 150Mi
+      limits:
+        memory: 300Mi
+    securityContext:
+      capabilities:
+        add: ["NET_ADMIN", "NET_RAW"]
+    env:
+    - name: NODE_NAME
+      valueFrom:
+        fieldRef:
+          fieldPath: spec.nodeName
+  hostNetwork: true
+  priorityClassName: system-node-critical
+  priority: 2000001000
+`
+
 	// EnableNodeControllerJobTemplate defines the node-controller enable job in yaml format
 	EnableNodeControllerJobTemplate = `
 apiVersion: batch/v1
