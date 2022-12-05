@@ -82,18 +82,18 @@ func NewRESTMapperManager(baseDir string) (*RESTMapperManager, error) {
 	// Recover the mapping relationship between GVR and GVK from the hard disk
 	storage := fs.FileSystemOperator{}
 	b, err := storage.Read(cachedFilePath)
-	if err == fs.ErrNotExists {
+	if err != nil {
+		return nil, fmt.Errorf("failed to read existing RESTMapper file at %s, %v", cachedFilePath, err)
+	} else if err == fs.ErrNotExists || len(b) == 0 {
 		dm = make(map[schema.GroupVersionResource]schema.GroupVersionKind)
-		err = storage.CreateFile(filepath.Join(baseDir, CacheDynamicRESTMapperKey), []byte{})
-		if err != nil {
-			return nil, fmt.Errorf("failed to init dynamic RESTMapper file at %s, %v", cachedFilePath, err)
+		if err == fs.ErrNotExists {
+			err = storage.CreateFile(filepath.Join(baseDir, CacheDynamicRESTMapperKey), []byte{})
+			if err != nil {
+				return nil, fmt.Errorf("failed to init dynamic RESTMapper file at %s, %v", cachedFilePath, err)
+			}
 		}
 		klog.Infof("initialize an empty DynamicRESTMapper")
-	} else if err != nil {
-		return nil, fmt.Errorf("failed to read existing RESTMapper file at %s, %v", cachedFilePath, err)
-	}
-
-	if len(b) != 0 {
+	} else {
 		dm, err = unmarshalDynamicRESTMapper(b)
 		if err != nil {
 			return nil, fmt.Errorf("unrecognized content in %s for err %v, initialization of RESTMapper failed", cachedFilePath, err)
