@@ -189,7 +189,7 @@ func (rp *RemoteProxy) modifyResponse(resp *http.Response) error {
 
 			resp.Body = rc
 		}
-	} else if resp.StatusCode == http.StatusNotFound && info.Verb == "list" && rp.cacheMgr != nil {
+	} else if resp.StatusCode == http.StatusNotFound && info != nil && info.Verb == "list" && rp.cacheMgr != nil {
 		// 404 Not Found: The CRD may have been unregistered and should be updated locally as well.
 		// Other types of requests may return a 404 response for other reasons (for example, getting a pod that doesn't exist).
 		// And the main purpose is to return 404 when list an unregistered resource locally, so here only consider the list request.

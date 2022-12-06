@@ -55,6 +55,7 @@ var (
 
 // CacheManager is an adaptor to cache runtime object data into backend storage
 type CacheManager interface {
+	GetStorageWrapper() StorageWrapper
 	CacheResponse(req *http.Request, prc io.ReadCloser, stopCh <-chan struct{}) error
 	QueryCache(req *http.Request) (runtime.Object, error)
 	CanCacheFor(req *http.Request) bool
@@ -91,6 +92,10 @@ func NewCacheManager(
 	}
 
 	return cm
+}
+
+func (cm *cacheManager) GetStorageWrapper() StorageWrapper {
+	return cm.storage
 }
 
 // CacheResponse cache response of request into backend storage

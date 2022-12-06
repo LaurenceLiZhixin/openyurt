@@ -17,7 +17,9 @@ limitations under the License.
 package proxy
 
 import (
+	"github.com/openyurtio/openyurt/pkg/yurthub/proxy/site"
 	"net/http"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apiserver/pkg/endpoints/filters"
@@ -40,6 +42,7 @@ type yurtReverseProxy struct {
 	loadBalancer        remote.LoadBalancer
 	checker             healthchecker.HealthChecker
 	localProxy          http.Handler
+	siteProxy           http.Handler
 	cacheMgr            cachemanager.CacheManager
 	maxRequestsInFlight int
 	tenantMgr           tenant.Interface
@@ -72,19 +75,20 @@ func NewYurtReverseProxyHandler(
 		return nil, err
 	}
 
-	var localProxy http.Handler
+	var localProxy, siteProxy http.Handler
 	// When yurthub is working in cloud mode, cacheMgr will be set to nil which means the local cache is disabled,
 	// so we don't need to create a LocalProxy.
 	if cacheMgr != nil {
 		localProxy = local.NewLocalProxy(cacheMgr, healthChecker.IsHealthy, yurtHubCfg.MinRequestTimeout)
 		localProxy = local.WithFakeTokenInject(localProxy, yurtHubCfg.SerializerManager)
+		siteProxy = site.NewSiteProxy(cacheMgr.GetStorageWrapper(), localProxy, lb)
 	}
 
 	yurtProxy := &yurtReverseProxy{
 		resolver:            resolver,
 		loadBalancer:        lb,
 		checker:             healthChecker,
-		localProxy:          localProxy,
+		siteProxy:           siteProxy,
 		cacheMgr:            cacheMgr,
 		maxRequestsInFlight: yurtHubCfg.MaxRequestInFlight,
 		tenantMgr:           tenantMgr,
@@ -120,6 +124,22 @@ func (p *yurtReverseProxy) buildHandlerChain(handler http.Handler) http.Handler 
 }
 
 func (p *yurtReverseProxy) ServeHTTP(rw http.ResponseWriter, req *http.Request) {
+	ctx := req.Context()
+	info, ok := apirequest.RequestInfoFrom(ctx)
+
+	if ok && info != nil && info.Resource != "" && info.IsResourceRequest {
+		// resource info
+		// don't support table
+		req.Header.Set("Accept", strings.Replace(req.Header.Get("Accept"), ";as=Table;", ";", -1))
+		p.siteProxy.ServeHTTP(rw, req)
+		return
+	}
+
+	// none resource info
+	p.ServeHTTPNoneWatch(rw, req)
+}
+
+func (p *yurtReverseProxy) ServeHTTPNoneWatch(rw http.ResponseWriter, req *http.Request) {
 	isKubeletLeaseReq := util.IsKubeletLeaseReq(req)
 	if !isKubeletLeaseReq && p.checker.IsHealthy() || p.localProxy == nil {
 		p.loadBalancer.ServeHTTP(rw, req)
