@@ -82,7 +82,7 @@ func NewRESTMapperManager(baseDir string) (*RESTMapperManager, error) {
 	// Recover the mapping relationship between GVR and GVK from the hard disk
 	storage := fs.FileSystemOperator{}
 	b, err := storage.Read(cachedFilePath)
-	if err != nil {
+	if err != nil && err != fs.ErrNotExists {
 		return nil, fmt.Errorf("failed to read existing RESTMapper file at %s, %v", cachedFilePath, err)
 	} else if err == fs.ErrNotExists || len(b) == 0 {
 		dm = make(map[schema.GroupVersionResource]schema.GroupVersionKind)
